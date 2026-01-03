@@ -47,3 +47,57 @@ Key flags:
 - SQLite migrations live in `apify_pipeline/sql/` and are applied automatically on startup. The initial migration introduces:
   - `accounts`: normalized handles with crawl state (`since_id`, `latest_timestamp`) and optional metadata.
   - `media`: attachments linked to posts (type, URL, preview, dimensions, description).
+
+---
+
+# 中文说明 (Chinese Translation)
+
+# 基于 Apify 的 X (Twitter) 摘要生成器 (使用 apidojo/twitter-scraper-lite)
+
+这是一个极简的脚手架工具，用于运行 Apify actor [`apidojo/twitter-scraper-lite`](https://apify.com/apidojo/twitter-scraper-lite)，抓取指定 X (Twitter) 账号的时间线，增量存储数据，并生成基于关键词的轻量级报告。
+
+## 快速开始 (样本/离线模式)
+```bash
+python apify_pipeline/pipeline.py --mode sample \
+  --report reports/apify-sample.md
+```
+使用 `sample_data/sample_tweets.jsonl` 中的数据，并在 `reports/` 目录下生成 Markdown 摘要。
+
+## 运行 Apify 抓取
+
+### 1. 配置环境
+复制环境变量示例文件并添加您的 Apify Token：
+```bash
+cp .env.example .env
+# 编辑 .env 文件并设置 APIFY_TOKEN="您的_token"
+```
+
+### 2. 运行流水线
+```bash
+# 加载环境变量 (如果未通过其他工具自动加载) 并运行
+export $(cat .env | xargs)
+python apify_pipeline/pipeline.py --mode apify --limit 10
+```
+
+关键参数：
+- `--actor-id`: 默认为 `apidojo~twitter-scraper-lite`。
+- `--input-template`: 默认为 `apify_pipeline/input.template.json` (如果 actor schema 变更，请修改此文件)。
+- `--config`: 账号列表 (YAML/JSON)，默认为 `apify_pipeline/accounts.yml`。
+- `--limit`: 每次运行每个账号抓取的最大推文数 (设置 `maxItems`)。
+- `--summary-model`: 可选的 OpenAI 兼容模型 ID (例如 `gpt-4o-mini` 或 DeepSeek 的 `deepseek-chat`)，用于在报告末尾附加 LLM 生成的摘要。需设置 `OPENAI_API_KEY` 或 `DEEPSEEK_API_KEY` (或通过 `--summary-api-key` 传递)，并安装 `openai` Python 包。对于非 OpenAI 服务商，请传递 `--summary-base-url` (例如 `https://api.deepseek.com`)。
+
+## 定时任务 (Cron/Systemd/Kubernetes)
+- **Cron**: 将 `deploy/cron/apify-pipeline.cron` 复制到 `/etc/cron.d/`，在 `/etc/default/apify-pipeline` 中设置 `APIFY_TOKEN`，并 (可选) 设置 `WORKDIR`/`LOGFILE`。任务默认在 UTC 时间 `0 0,12 * * *` 运行。
+- **Systemd**: 将 `deploy/systemd/apify-pipeline.service` 和 `deploy/systemd/apify-pipeline.timer` 放置在 `/etc/systemd/system/`，根据需要调整 `WorkingDirectory`，并在 `/etc/default/apify-pipeline` 中设置 `APIFY_TOKEN`。使用 `systemctl enable --now apify-pipeline.timer` 启用。
+- **Kubernetes**: 应用 `deploy/kubernetes/apify-pipeline-cronjob.yaml`，替换 `image:` 为您的构建镜像，并创建一个名为 `apify-token` 的 secret，其中 key `token` 包含 `APIFY_TOKEN`。该清单挂载了一个 PVC (`apify-pipeline-pvc`) 用于持久化 `apify_pipeline/data/` 和 `reports/`。
+- **容器化 Cron**: `deploy/container/entrypoint.sh` 负责写入 cron 条目，启动 cron 并将日志输出到 stdout。构建镜像时安装 cron 并将此脚本作为入口点；设置 `APIFY_TOKEN` (环境变量或 secret)，并可选地覆盖 `CRON_SCHEDULE`, `WORKDIR`, `LOGFILE` 或 `PIPELINE_CMD`。
+
+### 注意事项
+- 客户端会在 `apify_pipeline/data/digests.db` (自动创建) 的 SQLite 数据库中保存每个账号的 `since_id`，以避免重复抓取旧推文。
+- 报告主要基于关键词频率。如需附加 LLM 摘要，请传递 `--summary-model` (可选 `--summary-max-posts`) 以及 `OPENAI_API_KEY` 或 `DEEPSEEK_API_KEY`。如果服务商需要，请使用 `--summary-base-url`。
+- 对于大量账号集合，建议分批运行或降低 `--limit` 以控制成本。
+
+## 数据库 Schema 与迁移
+- SQLite 迁移文件位于 `apify_pipeline/sql/`，并在启动时自动应用。初始迁移包含：
+  - `accounts`: 标准化的账号句柄及抓取状态 (`since_id`, `latest_timestamp`) 和可选元数据。
+  - `media`: 关联到推文的附件 (类型, URL, 预览图, 尺寸, 描述)。
