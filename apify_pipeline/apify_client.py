@@ -361,6 +361,8 @@ class ApifyTweetScraperClient:
 
         media_items: List[Dict] = []
         for idx, media in enumerate(media_sources):
+            if not isinstance(media, dict):
+                continue
             media_id = media.get("id_str") or media.get("id") or media.get("media_key") or f"{tweet_id}-media-{idx}"
             media_url = (
                 media.get("media_url_https")

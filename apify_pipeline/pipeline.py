@@ -394,7 +394,7 @@ def main():
     parser.add_argument("--limit", type=int, default=40, help="Max posts per account per run")
     parser.add_argument("--max-total-limit", type=int, default=400, help="Global cap across all accounts to avoid over-fetch")
     parser.add_argument("--base-url", type=str, default="https://api.apify.com/v2")
-    parser.add_argument("--summary-model", type=str, default=None, help="Optional OpenAI model id to summarize posts")
+    parser.add_argument("--summary-model", type=str, default="deepseek-chat", help="Optional OpenAI model id to summarize posts")
     parser.add_argument("--summary-api-key", type=str, default=os.environ.get("OPENAI_API_KEY"))
     parser.add_argument(
         "--summary-base-url",
