@@ -1,0 +1,9 @@
+{
+  "handles": [],
+  "maxItems": 100,
+  "tweetLanguage": "en",
+  "addUserInfo": true,
+  "includeRetweets": false,
+  "includeReplies": false,
+  "proxyConfig": { "useApifyProxy": true }
+}

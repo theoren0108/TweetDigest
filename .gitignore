@@ -1,0 +1,4 @@
+apify_pipeline/data/
+reports/*.md
+reports/*.log
+__pycache__/
