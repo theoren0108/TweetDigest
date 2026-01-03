@@ -30,6 +30,7 @@ Key flags:
 - `--input-template`: defaults to `apify_pipeline/input.template.json` (edit if the actor schema changes).
 - `--config`: account list (YAML/JSON), defaults to `apify_pipeline/accounts.yml`.
 - `--limit`: max tweets per account per run (sets `maxItems`).
+- `--summary-model`: optional OpenAI-compatible model id (for example, `gpt-4o-mini` or DeepSeek's `deepseek-chat`) to append an LLM-written summary to the report. Set `OPENAI_API_KEY` or `DEEPSEEK_API_KEY` (or pass `--summary-api-key`), and install the `openai` Python package. For non-OpenAI hosts, pass `--summary-base-url` (e.g., `https://api.deepseek.com`).
 
 ## Scheduled runs (cron/systemd/Kubernetes)
 - Cron: copy `deploy/cron/apify-pipeline.cron` to `/etc/cron.d/`, set `APIFY_TOKEN` in `/etc/default/apify-pipeline`, and (optionally) set `WORKDIR`/`LOGFILE`. The job runs at `0 0,12 * * *` UTC and executes `python -m apify_pipeline.pipeline --mode apify --config apify_pipeline/accounts.yml --db apify_pipeline/data/digests.db --report reports/apify-daily.md`.
@@ -39,5 +40,10 @@ Key flags:
 
 ### Notes
 - The client keeps a per-account `since_id` in SQLite at `apify_pipeline/data/digests.db` (auto-created) to avoid re-fetching old posts.
-- Reports are keyword-frequency only; you can add LLM summarization downstream if desired.
+- Reports are keyword-frequency oriented. To append an LLM summary, pass `--summary-model` (and optionally `--summary-max-posts`) along with `OPENAI_API_KEY` or `DEEPSEEK_API_KEY`. Use `--summary-base-url` if your provider requires it.
 - For large account sets, run multiple batches or lower `--limit` to manage cost.
+
+## Database schema and migrations
+- SQLite migrations live in `apify_pipeline/sql/` and are applied automatically on startup. The initial migration introduces:
+  - `accounts`: normalized handles with crawl state (`since_id`, `latest_timestamp`) and optional metadata.
+  - `media`: attachments linked to posts (type, URL, preview, dimensions, description).
