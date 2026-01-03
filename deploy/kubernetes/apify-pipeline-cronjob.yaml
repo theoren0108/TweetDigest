@@ -1,0 +1,48 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: apify-pipeline-digest
+spec:
+  schedule: "0 0,12 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: apify-pipeline
+              image: your-registry.example.com/apify-pipeline:latest
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: APIFY_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: apify-token
+                      key: token
+                - name: TZ
+                  value: UTC
+              command:
+                - /bin/bash
+                - -lc
+                - |
+                  cd /app \
+                    && python -m apify_pipeline.pipeline \
+                    --mode apify \
+                    --config apify_pipeline/accounts.yml \
+                    --db apify_pipeline/data/digests.db \
+                    --report reports/apify-daily.md
+              volumeMounts:
+                - name: apify-data
+                  mountPath: /app/apify_pipeline/data
+                  subPath: data
+                - name: apify-data
+                  mountPath: /app/reports
+                  subPath: reports
+          volumes:
+            - name: apify-data
+              persistentVolumeClaim:
+                # Provision a PVC with subPaths `data` and `reports` directories for state and outputs
+                claimName: apify-pipeline-pvc

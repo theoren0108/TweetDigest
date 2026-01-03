@@ -1,0 +1,18 @@
+# /etc/cron.d/ drop-in to run the Apify pipeline twice daily (UTC)
+# Copy to /etc/cron.d/apify-pipeline and ensure /etc/default/apify-pipeline
+# (or another sourced file) exports APIFY_TOKEN and any other env vars.
+#
+# Schedules: 00:00 and 12:00 UTC
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+CRON_TZ=UTC
+
+# Optional: path where the repo lives. Update if different.
+WORKDIR=/opt/apify-pipeline
+
+# Persist job output if desired
+# LOGFILE=/var/log/apify-pipeline.log
+
+# Loads env from /etc/default/apify-pipeline if present, then runs the pipeline.
+# APIFY_TOKEN should be set in that file or injected by your secrets manager.
+0 0,12 * * * root bash -lc 'if [ -f /etc/default/apify-pipeline ]; then source /etc/default/apify-pipeline; fi; cd ${WORKDIR:-/opt/apify-pipeline} && python -m apify_pipeline.pipeline --mode apify --config apify_pipeline/accounts.yml --db apify_pipeline/data/digests.db --report reports/apify-daily.md' >> ${LOGFILE:-/var/log/apify-pipeline.log} 2>&1

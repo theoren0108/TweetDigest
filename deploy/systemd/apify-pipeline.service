@@ -1,0 +1,14 @@
+[Unit]
+Description=Run Apify pipeline digest
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/apify-pipeline
+EnvironmentFile=-/etc/default/apify-pipeline
+ExecStart=/usr/bin/env python -m apify_pipeline.pipeline --mode apify --config apify_pipeline/accounts.yml --db apify_pipeline/data/digests.db --report reports/apify-daily.md
+# Ensure APIFY_TOKEN is provided via EnvironmentFile or the environment
+
+[Install]
+WantedBy=multi-user.target
