@@ -84,6 +84,7 @@ class ApifyTweetScraperClient:
                         "created_at": self._coerce_timestamp(payload.get("created_at")),
                         "text": payload.get("text", ""),
                         "url": payload.get("url", ""),
+                        "media": payload.get("media") or [],
                     }
                 )
 
@@ -215,6 +216,7 @@ class ApifyTweetScraperClient:
                     "created_at": post["created_at"],
                     "text": post["text"],
                     "url": post["url"],
+                    "media": post.get("media") or [],
                 }
             )
 
@@ -252,12 +254,15 @@ class ApifyTweetScraperClient:
         if not url and author and tweet_id:
             url = f"https://x.com/{self._normalize_handle(author)}/status/{tweet_id}"
 
+        media = self._extract_media(raw, str(tweet_id))
+
         return {
             "id": str(tweet_id),
             "author": self._normalize_handle(author),
             "created_at": created_iso or "",
             "text": text,
             "url": url or "",
+            "media": media,
         }
 
     @staticmethod
@@ -333,6 +338,50 @@ class ApifyTweetScraperClient:
                 if appended >= limit:
                     break
         return posts
+
+    def _extract_media(self, raw: Dict, tweet_id: str) -> List[Dict]:
+        media_sources: List[Dict] = []
+        direct_media = raw.get("media")
+        if isinstance(direct_media, list):
+            media_sources.extend(direct_media)
+        elif isinstance(direct_media, dict):
+            media_sources.append(direct_media)
+
+        attachments = raw.get("attachments") or {}
+        attachments_media = attachments.get("media")
+        if isinstance(attachments_media, list):
+            media_sources.extend(attachments_media)
+        elif isinstance(attachments_media, dict):
+            media_sources.append(attachments_media)
+
+        extended_entities = raw.get("extended_entities") or {}
+        extended_media = extended_entities.get("media")
+        if isinstance(extended_media, list):
+            media_sources.extend(extended_media)
+
+        media_items: List[Dict] = []
+        for idx, media in enumerate(media_sources):
+            media_id = media.get("id_str") or media.get("id") or media.get("media_key") or f"{tweet_id}-media-{idx}"
+            media_url = (
+                media.get("media_url_https")
+                or media.get("media_url")
+                or media.get("url")
+                or media.get("expanded_url")
+                or media.get("preview_image_url")
+            )
+            preview_url = media.get("preview_image_url") or media.get("thumbnail") or media.get("thumbnail_url")
+            media_items.append(
+                {
+                    "id": str(media_id),
+                    "type": media.get("type"),
+                    "url": media_url,
+                    "preview_url": preview_url,
+                    "width": media.get("width") or media.get("original_width"),
+                    "height": media.get("height") or media.get("original_height"),
+                    "description": media.get("alt_text") or media.get("description"),
+                }
+            )
+        return media_items
 
     def _coerce_to_date(self, timestamp: Optional[str], fallback_days: int = 2) -> date:
         dt = self._parse_timestamp(timestamp)
