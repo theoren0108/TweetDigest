@@ -1,0 +1,10 @@
+[Unit]
+Description=Twice-daily Apify pipeline digest schedule (UTC)
+
+[Timer]
+OnCalendar=*-*-* 00,12:00:00 UTC
+Persistent=true
+Unit=apify-pipeline.service
+
+[Install]
+WantedBy=timers.target
