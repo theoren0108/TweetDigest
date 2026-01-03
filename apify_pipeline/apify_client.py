@@ -199,6 +199,7 @@ class ApifyTweetScraperClient:
                     "created_at": post["created_at"],
                     "text": post["text"],
                     "url": post["url"],
+                    "raw": post.get("raw", {}),
                 }
             )
 
@@ -245,6 +246,7 @@ class ApifyTweetScraperClient:
             "created_at": created_iso or "",
             "text": text,
             "url": url or "",
+            "raw": raw,
         }
 
     @staticmethod
