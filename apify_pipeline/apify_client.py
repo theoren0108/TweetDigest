@@ -4,7 +4,7 @@ import time
 import urllib.parse
 import urllib.request
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
@@ -40,22 +40,32 @@ class ApifyTweetScraperClient:
         self.timeout_seconds = timeout_seconds
 
     def fetch_accounts(
-        self, handles: List[str], since_map: Dict[str, Optional[str]], limit: int = 50
+        self,
+        handles: List[str],
+        since_map: Dict[str, Optional[str]],
+        since_ts_map: Dict[str, Optional[str]],
+        limit: int = 50,
+        max_total_limit: int = 500,
     ) -> List[Dict]:
         normalized_handles = [self._normalize_handle(h) for h in handles if h]
         since_map = {self._normalize_handle(k): v for k, v in since_map.items() if k}
+        since_ts_map = {self._normalize_handle(k): v for k, v in since_ts_map.items() if k}
 
         if not normalized_handles:
             return []
 
         if self.mode == "sample":
-            return self._load_sample(normalized_handles, since_map, limit)
+            return self._load_sample(normalized_handles, since_map, since_ts_map, limit)
         if self.mode != "apify":
             raise ValueError(f"Unsupported mode: {self.mode}")
-        return self._run_actor(normalized_handles, since_map, limit)
+        return self._run_actor(normalized_handles, since_map, since_ts_map, limit, max_total_limit)
 
     def _load_sample(
-        self, handles: List[str], since_map: Dict[str, Optional[str]], limit: int
+        self,
+        handles: List[str],
+        since_map: Dict[str, Optional[str]],
+        since_ts_map: Dict[str, Optional[str]],
+        limit: int,
     ) -> List[Dict]:
         if not self.sample_file.exists():
             return []
@@ -67,8 +77,6 @@ class ApifyTweetScraperClient:
                 if author not in buckets:
                     continue
                 tweet_id = str(payload.get("id"))
-                if since_map.get(author) and tweet_id <= str(since_map[author]):
-                    continue
                 buckets[author].append(
                     {
                         "id": tweet_id,
@@ -79,18 +87,20 @@ class ApifyTweetScraperClient:
                     }
                 )
 
-        posts: List[Dict] = []
-        for handle in handles:
-            posts.extend(sorted(buckets.get(handle, []), key=lambda p: str(p["id"]))[:limit])
-        return posts
+        return self._collect_sorted_posts(handles, buckets, since_map, since_ts_map, limit)
 
     def _run_actor(
-        self, handles: List[str], since_map: Dict[str, Optional[str]], limit: int
+        self,
+        handles: List[str],
+        since_map: Dict[str, Optional[str]],
+        since_ts_map: Dict[str, Optional[str]],
+        limit: int,
+        max_total_limit: int,
     ) -> List[Dict]:
         if not self.token:
             raise RuntimeError("Apify token is required in apify mode")
 
-        input_payload = self._build_input(handles, since_map, limit)
+        input_payload = self._build_input(handles, since_map, since_ts_map, limit, max_total_limit)
         run_data = self._start_run(input_payload)
         if run_data.get("status") != "SUCCEEDED":
             run_id = run_data.get("id")
@@ -99,25 +109,33 @@ class ApifyTweetScraperClient:
         if not dataset_id:
             return []
         items = self._fetch_dataset_items(dataset_id)
-        return self._normalize_items(items, handles, since_map, limit)
+        return self._normalize_items(items, handles, since_map, since_ts_map, limit)
 
     def _build_input(
-        self, handles: List[str], since_map: Dict[str, Optional[str]], limit: int
+        self,
+        handles: List[str],
+        since_map: Dict[str, Optional[str]],
+        since_ts_map: Dict[str, Optional[str]],
+        per_account_limit: int,
+        max_total_limit: int,
     ) -> Dict:
         payload = deepcopy(self.base_input)
-        total_limit = max(limit * max(len(handles), 1), 1)
+        per_account_limit = max(per_account_limit, 1)
+        total_limit = min(max(per_account_limit * max(len(handles), 1), 1), max_total_limit)
         
         # apidojo/twitter-scraper-lite uses 'searchTerms'
         # To get profile tweets, we use 'from:username'
         search_terms = []
+        now_date = datetime.now(timezone.utc).date()
         for handle in handles:
-            query = f"from:{handle}"
-            # Note: The Lite actor might not support since_id in search terms directly like API v1.1
-            # But standard search operators include since_id or since:YYYY-MM-DD
-            # However, mapping since_id to date might be complex without looking up the snowflake ID.
-            # For simplicity, we just search 'from:handle'. 
-            # If we wanted to be more precise, we could add 'since:YYYY-MM-DD' if we computed it.
-            search_terms.append(query)
+            query_parts = [f"from:{handle}"]
+            since_ts = since_ts_map.get(handle)
+            since_date = self._coerce_to_date(since_ts, fallback_days=2)
+            if since_date:
+                query_parts.append(f"since:{since_date.isoformat()}")
+                until_date = max(since_date, now_date)
+                query_parts.append(f"until:{(until_date + timedelta(days=3)).isoformat()}")
+            search_terms.append(" ".join(query_parts))
             
         payload["searchTerms"] = search_terms
         payload["maxItems"] = total_limit
@@ -177,6 +195,7 @@ class ApifyTweetScraperClient:
         items: Iterable[Dict],
         handles: List[str],
         since_map: Dict[str, Optional[str]],
+        since_ts_map: Dict[str, Optional[str]],
         limit: int,
     ) -> List[Dict]:
         buckets: Dict[str, List[Dict]] = {h: [] for h in handles}
@@ -189,12 +208,9 @@ class ApifyTweetScraperClient:
             author = self._normalize_handle(post["author"])
             if author not in handle_set:
                 continue
-            tweet_id = str(post["id"])
-            if since_map.get(author) and tweet_id <= str(since_map[author]):
-                continue
             buckets[author].append(
                 {
-                    "id": tweet_id,
+                    "id": str(post["id"]),
                     "author": author,
                     "created_at": post["created_at"],
                     "text": post["text"],
@@ -202,10 +218,7 @@ class ApifyTweetScraperClient:
                 }
             )
 
-        posts: List[Dict] = []
-        for handle in handles:
-            posts.extend(sorted(buckets.get(handle, []), key=lambda p: str(p["id"]))[:limit])
-        return posts
+        return self._collect_sorted_posts(handles, buckets, since_map, since_ts_map, limit)
 
     def _normalize_item(self, raw: Dict) -> Optional[Dict]:
         tweet_id = raw.get("id_str") or raw.get("id") or raw.get("tweetId")
@@ -273,3 +286,56 @@ class ApifyTweetScraperClient:
     @staticmethod
     def _normalize_handle(handle: str) -> str:
         return handle.lower().lstrip("@").strip()
+
+    @staticmethod
+    def _parse_timestamp(value: Optional[str]) -> Optional[datetime]:
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(timezone.utc)
+        except Exception:
+            return None
+
+    def _collect_sorted_posts(
+        self,
+        handles: List[str],
+        buckets: Dict[str, List[Dict]],
+        since_map: Dict[str, Optional[str]],
+        since_ts_map: Dict[str, Optional[str]],
+        limit: int,
+    ) -> List[Dict]:
+        posts: List[Dict] = []
+        for handle in handles:
+            author_posts = buckets.get(handle, [])
+            sorted_posts = sorted(
+                author_posts,
+                key=lambda p: (
+                    self._parse_timestamp(p.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+                    str(p.get("id", "")),
+                ),
+                reverse=True,
+            )
+            since_id = since_map.get(handle)
+            since_ts = self._parse_timestamp(since_ts_map.get(handle))
+            appended = 0
+
+            for post in sorted_posts:
+                tweet_id = str(post.get("id"))
+                created_ts = self._parse_timestamp(post.get("created_at"))
+
+                if since_id and tweet_id <= str(since_id):
+                    break
+                if since_ts and created_ts and created_ts <= since_ts:
+                    break
+
+                posts.append(post)
+                appended += 1
+                if appended >= limit:
+                    break
+        return posts
+
+    def _coerce_to_date(self, timestamp: Optional[str], fallback_days: int = 2) -> date:
+        dt = self._parse_timestamp(timestamp)
+        if not dt:
+            dt = datetime.now(timezone.utc)
+        return (dt - timedelta(days=fallback_days)).date()

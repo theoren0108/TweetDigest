@@ -5,7 +5,7 @@ import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
@@ -34,6 +34,14 @@ def init_db(db_path: Path) -> sqlite3.Connection:
         CREATE TABLE IF NOT EXISTS since_ids (
             account TEXT PRIMARY KEY,
             since_id TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS latest_timestamps (
+            account TEXT PRIMARY KEY,
+            latest_timestamp TEXT
         )
         """
     )
@@ -67,16 +75,57 @@ def read_accounts(config_path: Path) -> List[str]:
 
 
 def get_since_id(conn: sqlite3.Connection, account: str) -> Optional[str]:
+    since_id, _ = get_since_state(conn, account)
+    return since_id
+
+
+def set_since_id(conn: sqlite3.Connection, account: str, since_id: str, latest_timestamp: Optional[str] = None) -> None:
+    set_since_state(conn, account, since_id=since_id, latest_timestamp=latest_timestamp)
+
+
+def get_latest_timestamp(conn: sqlite3.Connection, account: str) -> Optional[str]:
+    _, latest_ts = get_since_state(conn, account)
+    return latest_ts
+
+
+def set_latest_timestamp(conn: sqlite3.Connection, account: str, latest_timestamp: str) -> None:
+    set_since_state(conn, account, latest_timestamp=latest_timestamp)
+
+
+def get_since_state(conn: sqlite3.Connection, account: str) -> Tuple[Optional[str], Optional[str]]:
     cur = conn.execute("SELECT since_id FROM since_ids WHERE account = ?", (account,))
-    row = cur.fetchone()
-    return row[0] if row else None
+    since_row = cur.fetchone()
+    cur = conn.execute("SELECT latest_timestamp FROM latest_timestamps WHERE account = ?", (account,))
+    ts_row = cur.fetchone()
+    since_id = since_row[0] if since_row else None
+    latest_ts = ts_row[0] if ts_row else None
+    return since_id, latest_ts
 
 
-def set_since_id(conn: sqlite3.Connection, account: str, since_id: str) -> None:
-    conn.execute(
-        "INSERT INTO since_ids(account, since_id) VALUES(?, ?) ON CONFLICT(account) DO UPDATE SET since_id = excluded.since_id",
-        (account, since_id),
-    )
+def set_since_state(
+    conn: sqlite3.Connection,
+    account: str,
+    since_id: Optional[str] = None,
+    latest_timestamp: Optional[str] = None,
+) -> None:
+    if since_id is not None:
+        conn.execute(
+            """
+            INSERT INTO since_ids(account, since_id)
+            VALUES(?, ?)
+            ON CONFLICT(account) DO UPDATE SET since_id = excluded.since_id
+            """,
+            (account, since_id),
+        )
+    if latest_timestamp is not None:
+        conn.execute(
+            """
+            INSERT INTO latest_timestamps(account, latest_timestamp)
+            VALUES(?, ?)
+            ON CONFLICT(account) DO UPDATE SET latest_timestamp = excluded.latest_timestamp
+            """,
+            (account, latest_timestamp),
+        )
     conn.commit()
 
 
@@ -115,6 +164,7 @@ def run_pipeline(
     report_path: Path,
     window_hours: int,
     limit: int,
+    max_total_limit: int,
     base_url: str,
 ) -> str:
     accounts = [acc.lower().lstrip("@") for acc in read_accounts(config_path)]
@@ -134,19 +184,33 @@ def run_pipeline(
     )
 
     since_map = {account: get_since_id(conn, account) for account in accounts}
-    posts = client.fetch_accounts(accounts, since_map, limit=limit)
+    since_ts_map = {account: get_latest_timestamp(conn, account) for account in accounts}
+    posts = client.fetch_accounts(accounts, since_map, since_ts_map, limit=limit, max_total_limit=max_total_limit)
     if posts:
         store_posts(conn, posts)
-        latest_per_author: Dict[str, str] = {}
+        latest_per_author: Dict[str, Dict[str, str]] = {}
         for post in posts:
             author = str(post.get("author", "")).lower()
             tweet_id = str(post.get("id"))
+            created_at = post.get("created_at")
+            try:
+                created_ts = parse_timestamp(created_at) if created_at else None
+            except Exception:
+                created_ts = None
             if not tweet_id:
                 continue
-            if author not in latest_per_author or tweet_id > latest_per_author[author]:
-                latest_per_author[author] = tweet_id
-        for author, since_id in latest_per_author.items():
-            set_since_id(conn, author, since_id)
+            existing = latest_per_author.get(author)
+            try:
+                existing_ts = parse_timestamp(existing.get("created_at", "")) if existing and existing.get("created_at") else None
+            except Exception:
+                existing_ts = None
+            if not existing or (created_ts and (not existing_ts or existing_ts < created_ts)):
+                latest_per_author[author] = {"id": tweet_id, "created_at": created_at or ""}
+            elif not existing_ts and existing and existing.get("id", "") < tweet_id:
+                # Fallback to id ordering if timestamp is missing
+                latest_per_author[author] = {"id": tweet_id, "created_at": created_at or ""}
+        for author, data in latest_per_author.items():
+            set_since_id(conn, author, data["id"], latest_timestamp=data.get("created_at"))
 
     posts = load_posts_in_window(conn, window_hours=window_hours)
     window_label = f"past {window_hours}h ending {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"
@@ -174,6 +238,7 @@ def main():
     parser.add_argument("--report", type=Path, default=Path(__file__).parent.parent / "reports" / "apify-daily.md")
     parser.add_argument("--window-hours", type=int, default=48)
     parser.add_argument("--limit", type=int, default=40, help="Max posts per account per run")
+    parser.add_argument("--max-total-limit", type=int, default=400, help="Global cap across all accounts to avoid over-fetch")
     parser.add_argument("--base-url", type=str, default="https://api.apify.com/v2")
     args = parser.parse_args()
 
@@ -188,6 +253,7 @@ def main():
         report_path=args.report,
         window_hours=args.window_hours,
         limit=args.limit,
+        max_total_limit=args.max_total_limit,
         base_url=args.base_url,
     )
     print(report)
