@@ -101,7 +101,7 @@ def build_report(posts: List[Dict], window_label: str, summary: Optional[str] = 
 
 def summarize_posts(
     posts: Sequence[Dict],
-    model: str = "gpt-4o-mini",
+    model: str = "deepseek-reasoner",
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
     max_posts: int = 30,
@@ -146,16 +146,42 @@ def summarize_posts(
         lines.append(f"- [{created_at}] @{author}: {text} (link: {url})")
 
     prompt = (
-        "Summarize the key developments, sentiment, and any noteworthy media references "
-        "from these social posts. Keep the response concise (4-8 bullet points) and actionable, "
-        "calling out accounts, dates, and tickers when helpful.\n\nPosts:\n"
+        "你是一名 buy-side 投研助理，任务是把“过去48小时的X(KOL)内容”提炼成可交易、可验证、可跟踪的情报简报。不要复述流水账；要提纯信号、指出关键变量与下一步动作。输出用中文，结论优先，少形容词。\n\n"
+        "【总原则（必须遵守）】\n"
+        "1) Signal > Noise：默认把“情绪宣泄/社交互动/明显玩笑或讽刺/无信息量转发”归为噪音，除非它引发了市场交易或提供了可核验事实。\n"
+        "2) 事实 vs 观点：每条关键结论必须标注【事实】或【观点】；事实需给出原文证据（引用不超过25个中文字符或15个英文单词）并附上对应链接。\n"
+        "3) 可交易性：每个主题必须回答“为什么重要→影响谁→需要盯什么变量→可能的交易表达方式（泛化，不给具体买卖建议）→最大不确定性”。\n"
+        "4) 可信度打分：对每个主题给出 1-5 分可信度（5最高），并用一句话解释评分依据（证据密度/可核验程度/是否自洽/是否仅喊单）。\n"
+        "5) 输出要短而硬：总字数尽量控制在 600-900 中文字；宁可少写但更有用。\n\n"
+        "【输出结构（严格按顺序）】\n"
+        "A) 60秒TL;DR（<=5条）\n"
+        "- 每条格式：结论一句话（<=26字）｜关键变量（<=12字）｜可信度(1-5)\n\n"
+        "B) Top 3 主题拆解（按“可交易性×新信息量”排序）\n"
+        "对每个主题输出一个小节，包含：\n"
+        "1. 核心判断（1-2句）\n"
+        "2. 证据（2-4条要点；每条：引用短句 + 链接 + 来自哪个账号）\n"
+        "3. 关键变量/数据（列 3-6 个，必须是后续可跟踪的指标）\n"
+        "4. 影响路径（用 1 条因果链：A→B→C）\n"
+        "5. 潜在受益/受损标的（可写行业/类型/已有ticker；不确定就写“待补”）\n"
+        "6. 最大不确定性（1句）\n"
+        "7. 明日跟踪动作（2-4条，可执行：要看什么数据/新闻/价格/公告）\n\n"
+        "C) Ticker/主题看板（表格）\n"
+        "列：Ticker或主题｜提及账号&次数｜情绪(正/负/混合)｜“新信息点”一句话｜下一步验证\n"
+        "- 只列你认为“有投研价值”的最多 8 行；其余不列\n\n"
+        "D) 噪音与风险提示（<=4条）\n"
+        "- 标注：哪些内容明显是玩笑/讽刺/未经证实的rumor/情绪喊单，并说明为什么应忽略或如何验证。\n\n"
+        "【你必须覆盖的细节】\n"
+        "- 如果某账号发了大量串推（如核燃料链条），要总结成“结构框架+变量”，不要逐条复述。\n"
+        "- 如果出现明显虚构/讽刺（如夸张政治军事剧情），必须在D部分点名为“非事实信号”。\n"
+        "- 如果出现具体数字（如发行份额、lbs、折溢价、NAV等），优先纳入证据与变量。\n\n"
+        "下面是内容：\n"
         + "\n".join(lines)
     )
 
     response = client.chat.completions.create(
         model=model,
         messages=[
-            {"role": "system", "content": "You are an analyst who writes crisp summaries of social media posts."},
+            {"role": "system", "content": "You are a professional buy-side investment research assistant. Output in Chinese."},
             {"role": "user", "content": prompt},
         ],
         temperature=0.2,

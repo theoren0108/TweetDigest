@@ -84,7 +84,7 @@ python apify_pipeline/pipeline.py --mode apify --limit 10
 - `--input-template`: 默认为 `apify_pipeline/input.template.json` (如果 actor schema 变更，请修改此文件)。
 - `--config`: 账号列表 (YAML/JSON)，默认为 `apify_pipeline/accounts.yml`。
 - `--limit`: 每次运行每个账号抓取的最大推文数 (设置 `maxItems`)。
-- `--summary-model`: 可选的 OpenAI 兼容模型 ID (例如 `gpt-4o-mini` 或 DeepSeek 的 `deepseek-chat`)，用于在报告末尾附加 LLM 生成的摘要。需设置 `OPENAI_API_KEY` 或 `DEEPSEEK_API_KEY` (或通过 `--summary-api-key` 传递)，并安装 `openai` Python 包。对于非 OpenAI 服务商，请传递 `--summary-base-url` (例如 `https://api.deepseek.com`)。
+- `--summary-model`: 可选的 OpenAI 兼容模型 ID (例如 `gpt-4o-mini` 或 DeepSeek 的 `deepseek-reasoner`)，用于在报告末尾附加 LLM 生成的摘要。需设置 `OPENAI_API_KEY` 或 `DEEPSEEK_API_KEY` (或通过 `--summary-api-key` 传递)，并安装 `openai` Python 包。对于非 OpenAI 服务商，请传递 `--summary-base-url` (例如 `https://api.deepseek.com`)。
 
 ## 定时任务 (Cron/Systemd/Kubernetes)
 - **Cron**: 将 `deploy/cron/apify-pipeline.cron` 复制到 `/etc/cron.d/`，在 `/etc/default/apify-pipeline` 中设置 `APIFY_TOKEN`，并 (可选) 设置 `WORKDIR`/`LOGFILE`。任务默认在 UTC 时间 `0 0,12 * * *` 运行。
