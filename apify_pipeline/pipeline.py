@@ -236,6 +236,16 @@ def store_posts(conn: sqlite3.Connection, posts: Iterable[Dict]) -> None:
     conn.commit()
 
 
+def mark_posts_as_summarized(conn: sqlite3.Connection, post_ids: List[str]) -> None:
+    if not post_ids:
+        return
+    conn.executemany(
+        "UPDATE posts SET is_summarized = 1 WHERE id = ?",
+        [(pid,) for pid in post_ids],
+    )
+    conn.commit()
+
+
 def load_posts_in_window(conn: sqlite3.Connection, window_hours: int = 48) -> List[Dict]:
     cutoff = datetime.now(timezone.utc) - timedelta(hours=window_hours)
     cur = conn.execute("SELECT post_id, id, type, url, preview_url, width, height, description FROM media")
@@ -254,7 +264,14 @@ def load_posts_in_window(conn: sqlite3.Connection, window_hours: int = 48) -> Li
             }
         )
 
-    cur = conn.execute("SELECT id, author, created_at, text, url FROM posts")
+    # Updated query to include is_summarized column
+    # Note: is_summarized column is added via migration 002
+    try:
+        cur = conn.execute("SELECT id, author, created_at, text, url, is_summarized FROM posts")
+    except sqlite3.OperationalError:
+        # Fallback if migration hasn't run yet (though init_db should handle it)
+        cur = conn.execute("SELECT id, author, created_at, text, url, 0 as is_summarized FROM posts")
+        
     rows = cur.fetchall()
     posts: List[Dict] = []
     for row in rows:
@@ -264,6 +281,7 @@ def load_posts_in_window(conn: sqlite3.Connection, window_hours: int = 48) -> Li
             "created_at": row[2],
             "text": row[3],
             "url": row[4],
+            "is_summarized": bool(row[5]),
             "media": media_map.get(row[0], []),
         }
         try:
@@ -356,18 +374,31 @@ def run_pipeline(
 
     posts = load_posts_in_window(conn, window_hours=window_hours)
     window_label = f"past {window_hours}h ending {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"
+    
     summary_text = None
     if summary_model:
-        try:
-            summary_text = summarize_posts(
-                posts,
-                model=summary_model,
-                api_key=summary_api_key,
-                base_url=summary_base_url,
-                max_posts=summary_max_posts,
-            )
-        except Exception as exc:
-            print(f"LLM summarization failed: {exc}", file=sys.stderr)
+        # Filter posts that haven't been summarized yet
+        posts_to_summarize = [p for p in posts if not p.get("is_summarized")]
+        
+        if not posts_to_summarize:
+            summary_text = "No new posts to summarize since last run."
+        else:
+            try:
+                summary_text = summarize_posts(
+                    posts_to_summarize,
+                    model=summary_model,
+                    api_key=summary_api_key,
+                    base_url=summary_base_url,
+                    max_posts=summary_max_posts,
+                )
+                # If summarization succeeded, mark posts as summarized
+                if summary_text:
+                    mark_posts_as_summarized(conn, [p["id"] for p in posts_to_summarize])
+            except Exception as exc:
+                import traceback
+                traceback.print_exc()
+                print(f"LLM summarization failed: {exc}", file=sys.stderr)
+                
     report_body = build_report(posts, window_label=window_label, summary=summary_text)
 
     report_path.parent.mkdir(parents=True, exist_ok=True)

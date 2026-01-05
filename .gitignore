@@ -16,3 +16,10 @@ venv/
 
 # Data
 apify_pipeline/data/digests.db
+
+# Logs and Reports
+cron.log
+reports/
+
+# IDE
+.trae/

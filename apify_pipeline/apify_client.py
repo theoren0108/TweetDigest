@@ -1,13 +1,13 @@
 import json
-import ssl
 import time
 import urllib.parse
-import urllib.request
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
+
+import requests
 
 
 class ApifyTweetScraperClient:
@@ -102,10 +102,17 @@ class ApifyTweetScraperClient:
             raise RuntimeError("Apify token is required in apify mode")
 
         input_payload = self._build_input(handles, since_map, since_ts_map, limit, max_total_limit)
+        
         run_data = self._start_run(input_payload)
         if run_data.get("status") != "SUCCEEDED":
             run_id = run_data.get("id")
+            print(f"Actor run started: {run_id}. Polling for completion...")
             run_data = self._poll_run(run_id)
+            
+        if run_data.get("status") != "SUCCEEDED":
+            print(f"Run failed or timed out: {run_data.get('status')}")
+            return []
+
         dataset_id = run_data.get("defaultDatasetId")
         if not dataset_id:
             return []
@@ -125,7 +132,6 @@ class ApifyTweetScraperClient:
         total_limit = min(max(per_account_limit * max(len(handles), 1), 1), max_total_limit)
         
         # apidojo/twitter-scraper-lite uses 'searchTerms'
-        # To get profile tweets, we use 'from:username'
         search_terms = []
         now_date = datetime.now(timezone.utc).date()
         for handle in handles:
@@ -141,7 +147,7 @@ class ApifyTweetScraperClient:
         payload["searchTerms"] = search_terms
         payload["maxItems"] = total_limit
         
-        # Clean up any potential legacy fields from template if they exist
+        # Clean up any potential legacy fields
         for key in ["handles", "usernames", "startUrls", "tweetsDesired", "author"]:
             payload.pop(key, None)
             
@@ -152,31 +158,24 @@ class ApifyTweetScraperClient:
             f"{self.base_url}/acts/{urllib.parse.quote(self.actor_id)}/runs"
             f"?token={urllib.parse.quote(self.token or '')}&waitForFinish={self.timeout_seconds}"
         )
-        request = urllib.request.Request(
-            url,
-            data=json.dumps(input_payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(request, timeout=self.timeout_seconds, context=ssl._create_unverified_context()) as response:
-            body = json.loads(response.read().decode("utf-8"))
+        response = requests.post(url, json=input_payload, headers={"Content-Type": "application/json"})
+        response.raise_for_status()
+        body = response.json()
         return body.get("data") or {}
 
     def _poll_run(self, run_id: Optional[str]) -> Dict:
         if not run_id:
             raise RuntimeError("Missing run id when polling Apify")
         deadline = time.time() + self.timeout_seconds
-        status_url = f"{self.base_url}/runs/{urllib.parse.quote(run_id)}?token={urllib.parse.quote(self.token)}"
+        status_url = f"{self.base_url}/runs/{urllib.parse.quote(run_id)}?token={urllib.parse.quote(self.token or '')}"
         terminal_states = {"SUCCEEDED", "FAILED", "TIMED_OUT", "ABORTED", "CANCELLED"}
 
         while time.time() < deadline:
-            request = urllib.request.Request(status_url, method="GET")
-            with urllib.request.urlopen(request, timeout=self.poll_interval + 5, context=ssl._create_unverified_context()) as response:
-                body = json.loads(response.read().decode("utf-8"))
+            response = requests.get(status_url)
+            response.raise_for_status()
+            body = response.json()
             data = body.get("data") or {}
             if data.get("status") in terminal_states:
-                if data.get("status") != "SUCCEEDED":
-                    raise RuntimeError(f"Apify run {run_id} ended with status {data.get('status')}")
                 return data
             time.sleep(self.poll_interval)
 
@@ -187,9 +186,9 @@ class ApifyTweetScraperClient:
             f"{self.base_url}/datasets/{urllib.parse.quote(dataset_id)}/items"
             f"?token={urllib.parse.quote(self.token or '')}&format=json"
         )
-        request = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(request, timeout=self.timeout_seconds, context=ssl._create_unverified_context()) as response:
-            return json.loads(response.read().decode("utf-8"))
+        response = requests.get(url)
+        response.raise_for_status()
+        return response.json()
 
     def _normalize_items(
         self,
@@ -234,7 +233,6 @@ class ApifyTweetScraperClient:
             or raw.get("user", {}).get("username")
             or raw.get("user", {}).get("screen_name")
         )
-        # Handle case where author is a dictionary (e.g. from some Apify actors)
         if isinstance(author, dict):
             author = author.get("userName") or author.get("username") or author.get("screen_name") or author.get("name")
             
@@ -385,7 +383,7 @@ class ApifyTweetScraperClient:
             )
         return media_items
 
-    def _coerce_to_date(self, timestamp: Optional[str], fallback_days: int = 2) -> date:
+    def _coerce_to_date(self, timestamp: Optional[str], fallback_days: int = 1) -> Optional[date]:
         dt = self._parse_timestamp(timestamp)
         if not dt:
             dt = datetime.now(timezone.utc)

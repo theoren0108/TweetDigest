@@ -12,12 +12,11 @@ fi
 REPORT_FILE="reports/digest-$(date +%Y%m%d-%H%M%S).md"
 
 # Run the pipeline
-# Note: Using full path to python to ensure correct environment. 
-# Assuming system python3 or venv python. Adjust if using specific venv.
-/usr/bin/python3 apify_pipeline/pipeline.py \
+# Note: Using /usr/local/bin/python3 (Python 3.13) where packages are installed
+/usr/local/bin/python3 apify_pipeline/pipeline.py \
   --mode apify \
   --limit 20 \
-  --summary-model "deepseek-chat" \
+  --summary-model "deepseek-reasoner" \
   --report "$REPORT_FILE" >> cron.log 2>&1
 
 echo "Report generated at $REPORT_FILE" >> cron.log
