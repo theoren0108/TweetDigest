@@ -470,11 +470,10 @@ def run_pipeline(
     if summary_model:
         # Filter posts that haven't been summarized yet
         posts_to_summarize = [p for p in posts if not p.get("is_summarized")]
-        final_posts_for_report = posts_to_summarize
-        
+
         if not posts_to_summarize:
             # No new posts, return empty dict or None. Analyzer handles it.
-            summary_result = None 
+            summary_result = None
         else:
             summary_result = {}
             # Group by category
@@ -483,7 +482,7 @@ def run_pipeline(
                 author = p.get("author", "").lower()
                 cat = category_map.get(author, "Uncategorized")
                 by_category[cat].append(p)
-            
+
             # Summarize each category
             for cat, cat_posts in by_category.items():
                 try:
@@ -504,7 +503,7 @@ def run_pipeline(
                     import traceback
                     traceback.print_exc()
                     print(f"LLM summarization failed for category {cat}: {exc}", file=sys.stderr)
-                
+
     report_body = build_report(
         final_posts_for_report, 
         window_label=window_label, 
