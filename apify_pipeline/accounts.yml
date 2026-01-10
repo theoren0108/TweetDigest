@@ -1,13 +1,27 @@
 accounts:
-  - FundaBottom
-  - sama
-  - quakes99
-  - dylan522p
-  - GavinSBaker
-  - gilbert
-  - akramsrazor
-  - ayz_yzyz
-  - TMTBreakout
-  - alc2022
-  - karpathy
+  AI:
+    - FundaBottom
+    - sama
+    - dylan522p
+    - gilbert
+    - akramsrazor
+    - ayz_yzyz
+    - TMTBreakout
+    - alc2022
+    - karpathy
+    - demishassabis
+  Investor:
+    - GavinSBaker
+    - Naval
+    - willwangtf
+    
+  Non-ferrous:
+    - quakes99
+    - uraniuminsider
+  Crypto: 
+    - Jackyi_ld
+    - thiccyth0t
+    - Jhy256
+    - ki_young_ju
+    - glassnode
 

@@ -3,6 +3,7 @@ import json
 import os
 import sqlite3
 import sys
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set, Tuple
@@ -73,29 +74,103 @@ def apply_sql_migrations(conn: sqlite3.Connection, migrations_dir: Path) -> None
     conn.commit()
 
 
-def read_accounts(config_path: Path) -> List[str]:
+def read_accounts(config_path: Path) -> Tuple[List[str], Dict[str, str]]:
+    """
+    Reads accounts from config. Supports flat list or nested category dict.
+    Returns (list_of_handles, handle_to_category_map).
+    """
     text = config_path.read_text(encoding="utf-8").strip()
+    category_map: Dict[str, str] = {}
+    accounts: List[str] = []
 
     if text.startswith("{") or text.startswith("["):
         data = json.loads(text)
         if isinstance(data, dict):
-            accounts = data.get("accounts", [])
+            # Check for nested structure in 'accounts' key
+            raw_accounts = data.get("accounts", [])
+            if isinstance(raw_accounts, dict):
+                for category, handles in raw_accounts.items():
+                    for handle in handles:
+                        h = str(handle).strip().lower().lstrip("@")
+                        if h:
+                            accounts.append(h)
+                            category_map[h] = category
+            else:
+                # Flat list
+                for acc in raw_accounts:
+                    h = str(acc).strip().lower().lstrip("@")
+                    if h:
+                        accounts.append(h)
         else:
-            accounts = data
-        return [str(acc).strip() for acc in accounts if acc]
+            # Top level list
+            for acc in data:
+                h = str(acc).strip().lower().lstrip("@")
+                if h:
+                    accounts.append(h)
+        return accounts, category_map
 
-    accounts: List[str] = []
+    # YAML-like parsing (simple)
+    try:
+        import yaml
+        data = yaml.safe_load(text)
+        if isinstance(data, dict) and "accounts" in data:
+            raw_accounts = data["accounts"]
+            if isinstance(raw_accounts, dict):
+                for category, handles in raw_accounts.items():
+                    if not handles:
+                        continue
+                    for handle in handles:
+                        h = str(handle).strip().lower().lstrip("@")
+                        if h:
+                            accounts.append(h)
+                            category_map[h] = category
+            elif isinstance(raw_accounts, list):
+                for acc in raw_accounts:
+                    h = str(acc).strip().lower().lstrip("@")
+                    if h:
+                        accounts.append(h)
+        return accounts, category_map
+    except ImportError:
+        # Fallback to manual parsing if yaml not installed, but we should assume standard structure
+        # Re-implementing simple manual parser for nested structure is complex, 
+        # let's assume the user has PyYAML or we rely on json/simple structure.
+        # Given the environment, let's try a robust manual parse for the specific format user uses.
+        pass
+        
+    # Manual fallback for the specific format user provided
+    current_category = "Uncategorized"
     in_accounts = False
-    for line in text.splitlines():
+    
+    # Reset
+    accounts = []
+    category_map = {}
+    
+    lines = text.splitlines()
+    for line in lines:
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
-        if stripped.startswith("accounts"):
+            
+        if stripped == "accounts:":
             in_accounts = True
             continue
-        if in_accounts and stripped.startswith("-"):
-            accounts.append(stripped.lstrip("-").strip())
-    return [acc for acc in accounts if acc]
+            
+        if not in_accounts:
+            continue
+            
+        # Detect category keys (e.g. "AI:")
+        if stripped.endswith(":") and not stripped.startswith("-"):
+            current_category = stripped[:-1]
+            continue
+            
+        # Detect list items
+        if stripped.startswith("-"):
+            handle = stripped.lstrip("-").strip().lower().lstrip("@")
+            if handle:
+                accounts.append(handle)
+                category_map[handle] = current_category
+                
+    return accounts, category_map
 
 
 def get_since_id(conn: sqlite3.Connection, account: str) -> Optional[str]:
@@ -264,12 +339,9 @@ def load_posts_in_window(conn: sqlite3.Connection, window_hours: int = 48) -> Li
             }
         )
 
-    # Updated query to include is_summarized column
-    # Note: is_summarized column is added via migration 002
     try:
         cur = conn.execute("SELECT id, author, created_at, text, url, is_summarized FROM posts")
     except sqlite3.OperationalError:
-        # Fallback if migration hasn't run yet (though init_db should handle it)
         cur = conn.execute("SELECT id, author, created_at, text, url, 0 as is_summarized FROM posts")
         
     rows = cur.fetchall()
@@ -293,10 +365,12 @@ def load_posts_in_window(conn: sqlite3.Connection, window_hours: int = 48) -> Li
     return posts
 
 
-def ensure_accounts(conn: sqlite3.Connection, accounts: Iterable[str]) -> None:
+def ensure_accounts(conn: sqlite3.Connection, accounts: Iterable[str], category_map: Optional[Dict[str, str]] = None) -> None:
     normalized = [acc.lower().lstrip("@") for acc in accounts if acc]
     if not normalized:
         return
+        
+    # First ensure they exist
     conn.executemany(
         """
         INSERT INTO accounts(handle, platform)
@@ -305,6 +379,20 @@ def ensure_accounts(conn: sqlite3.Connection, accounts: Iterable[str]) -> None:
         """,
         [(account,) for account in normalized],
     )
+    
+    # Update categories if map provided
+    if category_map:
+        update_data = []
+        for handle in normalized:
+            cat = category_map.get(handle)
+            if cat:
+                update_data.append((cat, handle))
+        if update_data:
+            conn.executemany(
+                "UPDATE accounts SET category = ? WHERE handle = ?",
+                update_data
+            )
+            
     conn.commit()
 
 
@@ -326,9 +414,10 @@ def run_pipeline(
     summary_base_url: Optional[str] = None,
     summary_max_posts: int = 30,
 ) -> str:
-    accounts = [acc.lower().lstrip("@") for acc in read_accounts(config_path)]
+    accounts_list, category_map = read_accounts(config_path)
+    
     conn = init_db(db_path)
-    ensure_accounts(conn, accounts)
+    ensure_accounts(conn, accounts_list, category_map)
 
     template_data: Optional[Dict] = None
     if input_template and input_template.exists():
@@ -343,9 +432,9 @@ def run_pipeline(
         input_template=template_data,
     )
 
-    since_map = {account: get_since_id(conn, account) for account in accounts}
-    since_ts_map = {account: get_latest_timestamp(conn, account) for account in accounts}
-    posts = client.fetch_accounts(accounts, since_map, since_ts_map, limit=limit, max_total_limit=max_total_limit)
+    since_map = {account: get_since_id(conn, account) for account in accounts_list}
+    since_ts_map = {account: get_latest_timestamp(conn, account) for account in accounts_list}
+    posts = client.fetch_accounts(accounts_list, since_map, since_ts_map, limit=limit, max_total_limit=max_total_limit)
     if posts:
         store_posts(conn, posts)
         latest_per_author: Dict[str, Dict[str, str]] = {}
@@ -375,31 +464,53 @@ def run_pipeline(
     posts = load_posts_in_window(conn, window_hours=window_hours)
     window_label = f"past {window_hours}h ending {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"
     
-    summary_text = None
+    summary_result: Optional[Dict[str, str]] = None
+    final_posts_for_report = posts
+
     if summary_model:
         # Filter posts that haven't been summarized yet
         posts_to_summarize = [p for p in posts if not p.get("is_summarized")]
+        final_posts_for_report = posts_to_summarize
         
         if not posts_to_summarize:
-            summary_text = "No new posts to summarize since last run."
+            # No new posts, return empty dict or None. Analyzer handles it.
+            summary_result = None 
         else:
-            try:
-                summary_text = summarize_posts(
-                    posts_to_summarize,
-                    model=summary_model,
-                    api_key=summary_api_key,
-                    base_url=summary_base_url,
-                    max_posts=summary_max_posts,
-                )
-                # If summarization succeeded, mark posts as summarized
-                if summary_text:
-                    mark_posts_as_summarized(conn, [p["id"] for p in posts_to_summarize])
-            except Exception as exc:
-                import traceback
-                traceback.print_exc()
-                print(f"LLM summarization failed: {exc}", file=sys.stderr)
+            summary_result = {}
+            # Group by category
+            by_category = defaultdict(list)
+            for p in posts_to_summarize:
+                author = p.get("author", "").lower()
+                cat = category_map.get(author, "Uncategorized")
+                by_category[cat].append(p)
+            
+            # Summarize each category
+            for cat, cat_posts in by_category.items():
+                try:
+                    print(f"Summarizing {len(cat_posts)} posts for category: {cat}...")
+                    cat_summary = summarize_posts(
+                        cat_posts,
+                        model=summary_model,
+                        api_key=summary_api_key,
+                        base_url=summary_base_url,
+                        max_posts=summary_max_posts,
+                        category=cat
+                    )
+                    if cat_summary:
+                        summary_result[cat] = cat_summary
+                        # Mark these posts as summarized
+                        mark_posts_as_summarized(conn, [p["id"] for p in cat_posts])
+                except Exception as exc:
+                    import traceback
+                    traceback.print_exc()
+                    print(f"LLM summarization failed for category {cat}: {exc}", file=sys.stderr)
                 
-    report_body = build_report(posts, window_label=window_label, summary=summary_text)
+    report_body = build_report(
+        final_posts_for_report, 
+        window_label=window_label, 
+        summary=summary_result,
+        category_map=category_map
+    )
 
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(report_body, encoding="utf-8")

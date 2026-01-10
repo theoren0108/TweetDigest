@@ -1,6 +1,11 @@
-# Apify-based X digest (apidojo/twitter-scraper-lite)
+# Apify-based X digest (apidojo/twitter-scraper-lite) v0.2.2
 
 Minimal scaffold that runs the Apify actor [`apidojo/twitter-scraper-lite`](https://apify.com/apidojo/twitter-scraper-lite) to pull timelines for a list of X accounts, store them incrementally, and emit a lightweight keyword-oriented report.
+
+## New in v0.2.2
+- **Incremental Summarization**: The LLM summary now only processes new posts that haven't been summarized in previous runs. Historical posts are preserved in the database but skipped by the summarizer to reduce noise and costs.
+- **Cost Optimization**: Default fetch limit reduced to 20 posts per account, and lookback window optimized to 1 day to minimize redundant API calls.
+- **Enhanced Reliability**: Switched network client to `requests` to resolve SSL handshake issues on some environments (e.g., macOS).
 
 ## Quick start (sample/offline mode)
 ```bash
@@ -22,14 +27,14 @@ cp .env.example .env
 ```bash
 # Load env vars (if not using a tool that does it auto) and run
 export $(cat .env | xargs)
-python apify_pipeline/pipeline.py --mode apify --limit 10
+python apify_pipeline/pipeline.py --mode apify --limit 20
 ```
 
 Key flags:
 - `--actor-id`: defaults to `apidojo~twitter-scraper-lite`.
 - `--input-template`: defaults to `apify_pipeline/input.template.json` (edit if the actor schema changes).
 - `--config`: account list (YAML/JSON), defaults to `apify_pipeline/accounts.yml`.
-- `--limit`: max tweets per account per run (sets `maxItems`).
+- `--limit`: max tweets per account per run (sets `maxItems`). Defaults to 20.
 - `--summary-model`: optional OpenAI-compatible model id (for example, `gpt-4o-mini` or DeepSeek's `deepseek-chat`) to append an LLM-written summary to the report. Set `OPENAI_API_KEY` or `DEEPSEEK_API_KEY` (or pass `--summary-api-key`), and install the `openai` Python package. For non-OpenAI hosts, pass `--summary-base-url` (e.g., `https://api.deepseek.com`).
 
 ## Scheduled runs (cron/systemd/Kubernetes)
@@ -47,14 +52,20 @@ Key flags:
 - SQLite migrations live in `apify_pipeline/sql/` and are applied automatically on startup. The initial migration introduces:
   - `accounts`: normalized handles with crawl state (`since_id`, `latest_timestamp`) and optional metadata.
   - `media`: attachments linked to posts (type, URL, preview, dimensions, description).
+  - `posts`: stores post content and summarization status (`is_summarized`).
 
 ---
 
 # 中文说明 (Chinese Translation)
 
-# 基于 Apify 的 X (Twitter) 摘要生成器 (使用 apidojo/twitter-scraper-lite)
+# 基于 Apify 的 X (Twitter) 摘要生成器 (使用 apidojo/twitter-scraper-lite) v0.2.2
 
 这是一个极简的脚手架工具，用于运行 Apify actor [`apidojo/twitter-scraper-lite`](https://apify.com/apidojo/twitter-scraper-lite)，抓取指定 X (Twitter) 账号的时间线，增量存储数据，并生成基于关键词的轻量级报告。
+
+## v0.2.2 更新内容
+- **增量总结**：LLM 摘要现在仅处理之前运行中未被总结的新推文。历史推文保留在数据库中但会被摘要器跳过，以减少噪音和 token 消耗。
+- **成本优化**：默认抓取限制降至每账号 20 条，回溯窗口优化为 1 天，最大限度减少冗余 API 调用。
+- **可靠性增强**：网络客户端切换至 `requests` 库，解决了在 macOS 等环境下的 SSL 握手问题。
 
 ## 快速开始 (样本/离线模式)
 ```bash
@@ -76,14 +87,14 @@ cp .env.example .env
 ```bash
 # 加载环境变量 (如果未通过其他工具自动加载) 并运行
 export $(cat .env | xargs)
-python apify_pipeline/pipeline.py --mode apify --limit 10
+python apify_pipeline/pipeline.py --mode apify --limit 20
 ```
 
 关键参数：
 - `--actor-id`: 默认为 `apidojo~twitter-scraper-lite`。
 - `--input-template`: 默认为 `apify_pipeline/input.template.json` (如果 actor schema 变更，请修改此文件)。
 - `--config`: 账号列表 (YAML/JSON)，默认为 `apify_pipeline/accounts.yml`。
-- `--limit`: 每次运行每个账号抓取的最大推文数 (设置 `maxItems`)。
+- `--limit`: 每次运行每个账号抓取的最大推文数 (设置 `maxItems`)。默认为 20。
 - `--summary-model`: 可选的 OpenAI 兼容模型 ID (例如 `gpt-4o-mini` 或 DeepSeek 的 `deepseek-reasoner`)，用于在报告末尾附加 LLM 生成的摘要。需设置 `OPENAI_API_KEY` 或 `DEEPSEEK_API_KEY` (或通过 `--summary-api-key` 传递)，并安装 `openai` Python 包。对于非 OpenAI 服务商，请传递 `--summary-base-url` (例如 `https://api.deepseek.com`)。
 
 ## 定时任务 (Cron/Systemd/Kubernetes)
@@ -101,3 +112,4 @@ python apify_pipeline/pipeline.py --mode apify --limit 10
 - SQLite 迁移文件位于 `apify_pipeline/sql/`，并在启动时自动应用。初始迁移包含：
   - `accounts`: 标准化的账号句柄及抓取状态 (`since_id`, `latest_timestamp`) 和可选元数据。
   - `media`: 关联到推文的附件 (类型, URL, 预览图, 尺寸, 描述)。
+  - `posts`: 存储推文内容及摘要状态 (`is_summarized`)。

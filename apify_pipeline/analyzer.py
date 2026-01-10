@@ -3,7 +3,7 @@ import os
 import re
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
-from typing import Dict, Iterable, List, Optional, Sequence
+from typing import Dict, Iterable, List, Optional, Sequence, Union
 
 STOPWORDS = {
     "the",
@@ -43,7 +43,7 @@ def parse_timestamp(value: str) -> datetime:
 
 
 def normalize_text(text: str) -> List[str]:
-    tokens = re.findall(r"[A-Za-z\\d_]+", text.lower())
+    tokens = re.findall(r"[A-Za-z\d_]+", text.lower())
     return [t for t in tokens if t not in STOPWORDS and len(t) > 2]
 
 
@@ -62,33 +62,75 @@ def split_by_author(posts: Iterable[Dict]) -> Dict[str, List[Dict]]:
     return buckets
 
 
+def split_by_category(posts: Iterable[Dict], category_map: Dict[str, str]) -> Dict[str, List[Dict]]:
+    buckets: Dict[str, List[Dict]] = defaultdict(list)
+    for post in posts:
+        author = post.get("author", "").lower()
+        category = category_map.get(author, "Uncategorized")
+        buckets[category].append(post)
+    return buckets
+
+
 def format_post(post: Dict) -> str:
     created_at = parse_timestamp(post["created_at"]).strftime("%Y-%m-%d %H:%M UTC")
     text = post.get("text", "").strip().replace("\n", " ")
     return f"- {created_at} — {text} ({post.get('url', '')})"
 
 
-def build_report(posts: List[Dict], window_label: str, summary: Optional[str] = None) -> str:
+def build_report(
+    posts: List[Dict],
+    window_label: str,
+    summary: Optional[Union[str, Dict[str, str]]] = None,
+    category_map: Optional[Dict[str, str]] = None,
+) -> str:
     if not posts:
         return f"## Daily digest ({window_label})\n\nNo new posts found in this window."
 
     keywords = extract_keywords(posts, top_n=12)
-    by_author = split_by_author(posts)
+    
+    # Organize posts
+    if category_map:
+        by_category = split_by_category(posts, category_map)
+    else:
+        by_category = {"All": posts}
 
     lines = [f"## Daily digest ({window_label})\n"]
     lines.append(f"Total new posts: **{len(posts)}**. Top keywords: {', '.join(keywords) if keywords else 'N/A'}.\n")
+
+    # Handle summaries (Global or Per-Category)
     if summary:
-        lines.append("### LLM summary\n")
-        lines.append(summary.strip())
-        lines.append("")
+        if isinstance(summary, dict):
+            # Per-category summary
+            lines.append("## Sector Summaries\n")
+            for cat, text in summary.items():
+                lines.append(f"### {cat}\n")
+                lines.append(text.strip())
+                lines.append("")
+        else:
+            # Global summary
+            lines.append("### LLM summary\n")
+            lines.append(summary.strip())
+            lines.append("")
 
-    lines.append("### Posts by account\n")
-    for author, author_posts in sorted(by_author.items()):
-        lines.append(f"**@{author}** — {len(author_posts)} posts")
-        for post in sorted(author_posts, key=lambda p: p.get("created_at", "")):
-            lines.append(format_post(post))
-        lines.append("")
-
+    lines.append("## Posts by Category\n")
+    
+    # Sort categories: specific ones first, "Uncategorized" last
+    sorted_cats = sorted(by_category.keys(), key=lambda x: (x == "Uncategorized", x))
+    
+    for category in sorted_cats:
+        cat_posts = by_category[category]
+        if not cat_posts:
+            continue
+            
+        lines.append(f"### {category}\n")
+        
+        by_author = split_by_author(cat_posts)
+        for author, author_posts in sorted(by_author.items()):
+            lines.append(f"**@{author}** — {len(author_posts)} posts")
+            for post in sorted(author_posts, key=lambda p: p.get("created_at", "")):
+                lines.append(format_post(post))
+            lines.append("")
+            
     lines.append("### Quick themes (frequency only)\n")
     for kw in keywords:
         lines.append(f"- {kw}")
@@ -105,6 +147,7 @@ def summarize_posts(
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
     max_posts: int = 30,
+    category: Optional[str] = None,
 ) -> str:
     """
     Summarize a set of posts with an LLM.
@@ -114,6 +157,7 @@ def summarize_posts(
         model: OpenAI chat model to use.
         api_key: OpenAI API key. Falls back to OPENAI_API_KEY env var.
         max_posts: Maximum number of posts to include in the prompt.
+        category: Optional category name to contextualize the summary.
     """
     material = list(posts)
     if not material:
@@ -145,8 +189,10 @@ def summarize_posts(
         url = post.get("url") or ""
         lines.append(f"- [{created_at}] @{author}: {text} (link: {url})")
 
+    context_str = f"“{category} 领域的”" if category else ""
+    
     prompt = (
-        "你是一名 buy-side 投研助理，任务是把“过去48小时的X(KOL)内容”提炼成可交易、可验证、可跟踪的情报简报。不要复述流水账；要提纯信号、指出关键变量与下一步动作。输出用中文，结论优先，少形容词。\n\n"
+        f"你是一名 buy-side 投研助理，任务是把{context_str}“过去48小时的X(KOL)内容”提炼成可交易、可验证、可跟踪的情报简报。不要复述流水账；要提纯信号、指出关键变量与下一步动作。输出用中文，结论优先，少形容词。\n\n"
         "【总原则（必须遵守）】\n"
         "1) Signal > Noise：默认把“情绪宣泄/社交互动/明显玩笑或讽刺/无信息量转发”归为噪音，除非它引发了市场交易或提供了可核验事实。\n"
         "2) 事实 vs 观点：每条关键结论必须标注【事实】或【观点】；事实需给出原文证据（引用不超过25个中文字符或15个英文单词）并附上对应链接。\n"
