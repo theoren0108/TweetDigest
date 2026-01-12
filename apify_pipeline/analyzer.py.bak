@@ -71,6 +71,26 @@ def split_by_category(posts: Iterable[Dict], category_map: Dict[str, str]) -> Di
     return buckets
 
 
+def normalize_summary_format(summary_text: str) -> str:
+    import re
+    
+    summary_text = re.sub(
+        r'^####\s*\*?\*?(.*?)\*?\*?\s*$',
+        r'**\1**',
+        summary_text,
+        flags=re.MULTILINE
+    )
+    
+    summary_text = re.sub(
+        r'^###\s*\*?\*?(.*?)\*?\*?\s*$',
+        r'**\1**',
+        summary_text,
+        flags=re.MULTILINE
+    )
+    
+    return summary_text
+
+
 def format_post(post: Dict) -> str:
     created_at = parse_timestamp(post["created_at"]).strftime("%Y-%m-%d %H:%M UTC")
     text = post.get("text", "").strip().replace("\n", " ")
@@ -102,16 +122,16 @@ def build_report(
     # Handle summaries (Global or Per-Category)
     if summary:
         if isinstance(summary, dict):
-            # Per-category summary
             lines.append("## Sector Summaries\n")
             for cat, text in summary.items():
                 lines.append(f"### {cat}\n")
-                lines.append(text.strip())
+                normalized_text = normalize_summary_format(text)
+                lines.append(normalized_text.strip())
                 lines.append("")
         else:
-            # Global summary
             lines.append("### LLM summary\n")
-            lines.append(summary.strip())
+            normalized_summary = normalize_summary_format(summary)
+            lines.append(normalized_summary.strip())
             lines.append("")
 
     lines.append("## Posts by Category\n")
@@ -194,66 +214,47 @@ def summarize_posts(
     context_str = f"“{category} 领域的”" if category else ""
     
     prompt = (
-        f"你是一名 buy-side 投研助理，任务是把{context_str}“过去48小时的X(KOL)内容”提炼成可交易、可验证、可跟踪的情报简报。不要复述流水账；要提纯信号、指出关键变量与下一步动作。输出用中文，结论优先，少形容词。\n\n"
-        "【总原则（必须遵守）】\n"
-        "1) Signal > Noise：默认把“情绪宣泄/社交互动/明显玩笑或讽刺/无信息量转发”归为噪音，除非它引发了市场交易或提供了可核验事实。\n"
-        "2) 事实 vs 观点：每条关键结论必须标注【事实】或【观点】；事实需给出原文证据（引用不超过25个中文字符或15个英文单词）并附上对应链接。\n"
-        "3) 可交易性：每个主题必须回答“为什么重要→影响谁→需要盯什么变量→可能的交易表达方式（泛化，不给具体买卖建议）→最大不确定性”。\n"
-        "4) 可信度打分：对每个主题给出 1-5 分可信度（5最高），并用一句话解释评分依据（证据密度/可核验程度/是否自洽/是否仅喊单）。\n"
-        "5) 输出要短而硬：总字数尽量控制在 600-900 中文字；宁可少写但更有用。\n\n"
-        "【输出结构（严格按顺序）】\n"
-        "A) 60秒TL;DR（<=5条）\n"
-        "- 每条格式：结论一句话（<=26字）｜关键变量（<=12字）｜可信度(1-5)\n\n"
-        "B) Top 3 主题拆解（按“可交易性×新信息量”排序）\n"
-        "对每个主题输出一个小节，包含：\n"
-        "1. 核心判断（1-2句）\n"
-        "2. 证据（2-4条要点；每条：引用短句 + 链接 + 来自哪个账号）\n"
-        "3. 关键变量/数据（列 3-6 个，必须是后续可跟踪的指标）\n"
-        "4. 影响路径（用 1 条因果链：A→B→C）\n"
-        "5. 潜在受益/受损标的（可写行业/类型/已有ticker；不确定就写“待补”）\n"
-        "6. 最大不确定性（1句）\n"
-        "7. 明日跟踪动作（2-4条，可执行：要看什么数据/新闻/价格/公告）\n\n"
-        "C) Ticker/主题看板（表格）\n"
-        "列：Ticker或主题｜提及账号&次数｜情绪(正/负/混合)｜“新信息点”一句话｜下一步验证\n"
-        "- 只列你认为“有投研价值”的最多 8 行；其余不列\n\n"
-        "D) 噪音与风险提示（<=4条）\n"
-        "- 标注：哪些内容明显是玩笑/讽刺/未经证实的rumor/情绪喊单，并说明为什么应忽略或如何验证。\n\n"
+        f"你是一名 buy-side 投研助理,任务是把{context_str}“过去48小时的X(KOL)内容”提炼成可交易、可验证、可跟踪的情报简报. 不要复述流水账; 要提纯信号、指出关键变量与下一步动作. 输出用中文,结论优先,少形容词. \n\n"
+        "【总原则(必须遵守)】\n"
+        "1) Signal > Noise: 默认把“情绪宣泄/社交互动/明显玩笑或讽刺/无信息量转发”归为噪音,除非它引发了市场交易或提供了可核验事实. \n"
+        "2) 事实 vs 观点: 每条关键结论必须标注【事实】或【观点】; 事实需给出原文证据(引用不超过25个中文字符或15个英文单词)并附上对应链接. \n"
+        "3) 可交易性: 每个主题必须回答“为什么重要->影响谁->需要盯什么变量->可能的交易表达方式(泛化,不给具体买卖建议)->最大不确定性”. \n"
+        "4) 可信度打分: 对每个主题给出 1-5 分可信度(5最高),并用一句话解释评分依据(证据密度/可核验程度/是否自洽/是否仅喊单). \n"
+        "5) 输出要短而硬: 总字数尽量控制在 600-900 中文字; 宁可少写但更有用. \n\n"
+        "【输出结构(严格按顺序)】\n"
+        "A) 60秒TL;DR(<=5条)\n"
+        "- 每条格式: 结论一句话(<=26字)｜关键变量(<=12字)｜可信度(1-5)\n\n"
+        "B) Top 3 主题拆解(按“可交易性x新信息量”排序)\n"
+        "对每个主题输出一个小节,包含: \n"
+        "1. 核心判断(1-2句)\n"
+        "2. 证据(2-4条要点; 每条: 引用短句 + 链接 + 来自哪个账号)\n"
+        "3. 关键变量/数据(列 3-6 个,必须是后续可跟踪的指标)\n"
+        "4. 影响路径(用 1 条因果链: A->B->C)\n"
+        "5. 潜在受益/受损标的(可写行业/类型/已有ticker; 不确定就写“待补”)\n"
+        "6. 最大不确定性(1句)\n"
+        "7. 明日跟踪动作(2-4条,可执行: 要看什么数据/新闻/价格/公告)\n\n"
+        "C) Ticker/主题看板(表格)\n"
+        "列: Ticker或主题｜提及账号&次数｜情绪(正/负/混合)｜“新信息点”一句话｜下一步验证\n"
+        "- 只列你认为“有投研价值”的最多 8 行; 其余不列\n\n"
+        "D) 噪音与风险提示(<=4条)\n"
+        "- 标注: 哪些内容明显是玩笑/讽刺/未经证实的rumor/情绪喊单,并说明为什么应忽略或如何验证. \n\n"
         "【你必须覆盖的细节】\n"
-        "- 如果某账号发了大量串推（如核燃料链条），要总结成“结构框架+变量”，不要逐条复述。\n"
-        "- 如果出现明显虚构/讽刺（如夸张政治军事剧情），必须在D部分点名为“非事实信号”。\n"
-        "- 如果出现具体数字（如发行份额、lbs、折溢价、NAV等），优先纳入证据与变量。\n\n"
-        "下面是内容：\n"
+        "- 如果某账号发了大量串推(如核燃料链条),要总结成“结构框架+变量”,不要逐条复述. \n"
+        "- 如果出现明显虚构/讽刺(如夸张政治军事剧情),必须在D部分点名为“非事实信号”. \n"
+        "- 如果出现具体数字(如发行份额、lbs、折溢价、NAV等),优先纳入证据与变量. \n\n"
+        "下面是内容: \n"
         + "\n".join(lines)
     )
 
-    import time
-    from openai import APIConnectionError, APITimeoutError, InternalServerError
-
-    max_retries = 3
-    base_delay = 5
-    
-    for attempt in range(max_retries):
-        try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": "You are a professional buy-side investment research assistant. Output in Chinese."},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.2,
-                timeout=180,  # Explicit 3-minute timeout
-            )
-            return (response.choices[0].message.content or "").strip()
-        except (APIConnectionError, APITimeoutError, InternalServerError) as e:
-            if attempt == max_retries - 1:
-                print(f"Failed to generate summary after {max_retries} attempts: {e}")
-                raise e
-            
-            delay = base_delay * (2 ** attempt)
-            print(f"LLM request failed ({e}). Retrying in {delay}s...")
-            time.sleep(delay)
-            
-    return ""
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": "You are a professional buy-side investment research assistant. Output in Chinese."},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.2,
+    )
+    return (response.choices[0].message.content or "").strip()
 
 
 def summarize_posts_weekly(
@@ -301,8 +302,8 @@ def summarize_posts_weekly(
         text = (post.get("text") or "").strip().replace("\n", " ")
         if len(text) > 400:
             text = text[:400] + "..."
-        # OPTIMIZATION: Do not include URL in the prompt to save tokens
-        lines.append(f"- [{created_at}] @{author}: {text}")
+        url = post.get("url") or ""
+        lines.append(f"- [{created_at}] @{author}: {text} (link: {url})")
 
     context_str = f"「{category} 领域的」" if category else ""
     
@@ -314,19 +315,19 @@ def summarize_posts_weekly(
         "【总原则(必须遵守)】\n"
         "1) 时序视角: 从7天的时间跨度看问题,识别事件的时间线和演变过程. \n"
         "2) 事实 vs 观点: 每条关键结论必须标注【事实】或【观点】; 事实需给出原文证据(引用不超过25个中文字符或15个英文单词)并附上对应链接. \n"
-        "3) 可交易性: 每个投研信号必须回答\"为什么重要->影响谁->需要盯什么变量->可能的交易表达方式(泛化,不给具体买卖建议)->最大不确定性\". \n"
+        "3) 可交易性: 每个投研信号必须回答"为什么重要->影响谁->需要盯什么变量->可能的交易表达方式(泛化,不给具体买卖建议)->最大不确定性". \n"
         "4) 趋势识别: 基于7天的数据,识别持续出现的热点、情绪变化、话题转移等趋势. \n"
         "5) 输出要全面: 总字数控制在 1500-2500 中文字; 宁可多写有价值内容. \n\n"
         "【输出结构(严格按顺序)】\n\n"
         "A) 本周核心事件回顾(3-5条)\n"
         "- 每条格式: 事件描述(1-2句)｜发生时间｜影响领域｜重要性评级(1-5,5最高)\n\n"
-        "B) 投研信号提炼(Top 5,按\"可交易性x新信息量\"排序)\n"
+        "B) 投研信号提炼(Top 5,按"可交易性x新信息量"排序)\n"
         "对每个信号输出一个小节,包含: \n"
         "1. 核心判断(1-2句)\n"
         "2. 证据(2-4条要点; 每条: 引用短句 + 链接 + 来自哪个账号)\n"
         "3. 关键变量/数据(列 3-6 个,必须是后续可跟踪的指标)\n"
         "4. 影响路径(用 1 条因果链: A->B->C)\n"
-        "5. 潜在受益/受损标的(可写行业/类型/已有ticker; 不确定就写\"待补\")\n"
+        "5. 潜在受益/受损标的(可写行业/类型/已有ticker; 不确定就写"待补")\n"
         "6. 最大不确定性(1句)\n"
         "7. 下周跟踪动作(2-4条,可执行: 要看什么数据/新闻/价格/公告)\n\n"
         "C) 长期趋势分析(3-4个趋势)\n"
@@ -339,13 +340,13 @@ def summarize_posts_weekly(
         "- 标注不同领域间的信号关联(如: AI领域算力需求↑ -> Crypto领域AI代币↑)\n"
         "- 格式: 领域A信号 -> 领域B影响(解释机制)\n\n"
         "E) Ticker/主题看板(表格)\n"
-        "列: Ticker或主题｜提及账号&次数｜情绪(正/负/混合)｜\"新信息点\"一句话｜下一步验证\n"
-        "- 只列你认为\"有投研价值\"的最多 10 行; 其余不列\n\n"
+        "列: Ticker或主题｜提及账号&次数｜情绪(正/负/混合)｜"新信息点"一句话｜下一步验证\n"
+        "- 只列你认为"有投研价值"的最多 10 行; 其余不列\n\n"
         "F) 噪音与风险提示(<=5条)\n"
         "- 标注: 哪些内容明显是玩笑/讽刺/未经证实的rumor/情绪喊单,并说明为什么应忽略或如何验证. \n\n"
         "【你必须覆盖的细节】\n"
-        "- 如果某账号发了大量串推(如核燃料链条),要总结成\"结构框架+变量\",不要逐条复述. \n"
-        "- 如果出现明显虚构/讽刺(如夸张政治军事剧情),必须在F部分点名为\"非事实信号\". \n"
+        "- 如果某账号发了大量串推(如核燃料链条),要总结成"结构框架+变量",不要逐条复述. \n"
+        "- 如果出现明显虚构/讽刺(如夸张政治军事剧情),必须在F部分点名为"非事实信号". \n"
         "- 如果出现具体数字(如发行份额、lbs、折溢价、NAV等),优先纳入证据与变量. \n"
         "- 关注7天内持续出现、逐渐发酵的信号,而不只是单日热点. \n"
         "- 识别情绪变化(如: 周一乐观->周三谨慎->周五恐慌),并在趋势分析中体现. \n\n"
@@ -353,32 +354,12 @@ def summarize_posts_weekly(
         + "\n".join(lines)
     )
 
-    import time
-    from openai import APIConnectionError, APITimeoutError, InternalServerError
-
-    max_retries = 3
-    base_delay = 5
-
-    for attempt in range(max_retries):
-        try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": "You are a professional buy-side investment research assistant. Output in Chinese."},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.2,
-                timeout=240,  # 4-minute timeout for reasoning models
-            )
-            return (response.choices[0].message.content or "").strip()
-        except (APIConnectionError, APITimeoutError, InternalServerError) as e:
-            if attempt == max_retries - 1:
-                print(f"Failed to generate weekly summary after {max_retries} attempts: {e}")
-                raise e
-            
-            delay = base_delay * (2 ** attempt)
-            print(f"Weekly LLM request failed ({e}). Retrying in {delay}s...")
-            time.sleep(delay)
-            
-    return ""
-
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": "You are a professional buy-side investment research assistant. Output in Chinese."},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.2,
+    )
+    return (response.choices[0].message.content or "").strip()

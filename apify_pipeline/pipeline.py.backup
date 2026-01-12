@@ -14,7 +14,6 @@ if str(ROOT) not in sys.path:
 
 from apify_pipeline.analyzer import build_report, parse_timestamp, summarize_posts, summarize_posts_weekly
 from apify_pipeline.apify_client import ApifyTweetScraperClient
-from apify_pipeline.feishu_client import send_report_to_feishu
 
 
 def init_db(db_path: Path) -> sqlite3.Connection:
@@ -474,14 +473,11 @@ def run_pipeline(
     if input_template and input_template.exists():
         template_data = json.loads(input_template.read_text(encoding="utf-8"))
 
-    # For weekly mode, we still want to fetch data using 'apify' mode
-    client_mode = "apify" if mode == "weekly" else mode
-    
     client = ApifyTweetScraperClient(
         token=token,
         actor_id=actor_id,
         base_url=base_url,
-        mode=client_mode,
+        mode=mode,
         sample_file=sample_file,
         input_template=template_data,
     )
@@ -545,19 +541,10 @@ def run_pipeline(
                     )
                     if cat_summary:
                         summary_result[cat] = cat_summary
-                        
-                        # Save intermediate result
-                        safe_cat = "".join(c for c in cat if c.isalnum() or c in (' ', '_', '-')).strip().replace(' ', '_')
-                        intermediate_path = report_path.parent / f"partial_{safe_cat}_{datetime.now().strftime('%Y%m%d')}.md"
-                        intermediate_path.write_text(f"# {cat} Weekly Summary\n\n{cat_summary}", encoding="utf-8")
-                        print(f"Saved intermediate summary to {intermediate_path}")
-
                 except Exception as exc:
                     import traceback
                     traceback.print_exc()
                     print(f"LLM summarization failed for category {cat}: {exc}", file=sys.stderr)
-                    # Continue to next category instead of crashing
-                    continue
         else:
             print("Warning: Weekly mode requires --weekly-model to generate summaries.")
     else:
@@ -613,17 +600,11 @@ def run_pipeline(
         window_label=window_label, 
         summary=summary_result,
         category_map=category_map,
-        report_type="daily" if mode != "weekly" else "weekly",
+        report_type="daily" if mode != "weekly" else "weekly"
     )
 
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(report_body, encoding="utf-8")
-    try:
-        doc_url = send_report_to_feishu(report_body, report_mode=mode)
-        if doc_url:
-            print(f"Feishu doc created: {doc_url}")
-    except Exception as exc:
-        print(f"Feishu notification failed: {exc}", file=sys.stderr)
     return report_body
 
 

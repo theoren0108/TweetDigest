@@ -1,11 +1,18 @@
-# Apify-based X digest (apidojo/twitter-scraper-lite) v0.2.2
+# Apify-based X digest (apidojo/twitter-scraper-lite) v0.3.0
 
 Minimal scaffold that runs the Apify actor [`apidojo/twitter-scraper-lite`](https://apify.com/apidojo/twitter-scraper-lite) to pull timelines for a list of X accounts, store them incrementally, and emit a lightweight keyword-oriented report.
 
+## New in v0.3.0
+- **Feishu/Lark Integration**: Automatically pushes reports to a Feishu group chat as cloud documents (Docx).
+  - Includes smart permission management: automatically adds the group as a collaborator to ensure seamless access.
+  - Logic decoupled into a standalone `feishu_connector` library for easy reuse.
+- **Weekly Report Mode**: New `--mode weekly` aggregates posts from the past 7 days (ignoring "summarized" status) for a deeper retrospective, optimized for reasoning models like `deepseek-reasoner`.
+- **Reliability Fixes**: Improved Feishu document link generation (using standard `feishu.cn` URLs) and permissions handling.
+
 ## New in v0.2.2
-- **Incremental Summarization**: The LLM summary now only processes new posts that haven't been summarized in previous runs. Historical posts are preserved in the database but skipped by the summarizer to reduce noise and costs.
-- **Cost Optimization**: Default fetch limit reduced to 20 posts per account, and lookback window optimized to 1 day to minimize redundant API calls.
-- **Enhanced Reliability**: Switched network client to `requests` to resolve SSL handshake issues on some environments (e.g., macOS).
+- **Incremental Summarization**: The LLM summary now only processes new posts that haven't been summarized in previous runs.
+- **Cost Optimization**: Default fetch limit reduced to 20 posts per account.
+- **Enhanced Reliability**: Switched network client to `requests`.
 
 ## Quick start (sample/offline mode)
 ```bash
@@ -58,14 +65,21 @@ Key flags:
 
 # 中文说明 (Chinese Translation)
 
-# 基于 Apify 的 X (Twitter) 摘要生成器 (使用 apidojo/twitter-scraper-lite) v0.2.2
+# 基于 Apify 的 X (Twitter) 摘要生成器 (使用 apidojo/twitter-scraper-lite) v0.3.0
 
 这是一个极简的脚手架工具，用于运行 Apify actor [`apidojo/twitter-scraper-lite`](https://apify.com/apidojo/twitter-scraper-lite)，抓取指定 X (Twitter) 账号的时间线，增量存储数据，并生成基于关键词的轻量级报告。
 
+## v0.3.0 更新内容
+- **飞书/Lark 集成**: 自动将报告以云文档 (Docx) 形式推送到飞书群聊。
+  - **智能权限**: 自动将目标群组添加为文档协作者，确保群内成员无需申请权限即可直接打开。
+  - **模块化**: 飞书核心逻辑已拆分为独立的 `feishu_connector` 库。
+- **周报模式**: 新增 `--mode weekly`，汇总过去 7 天的所有推文（不限是否已摘要），适合配合 `deepseek-reasoner` 等推理模型生成深度周报。
+- **体验优化**: 修复了文档链接无法打开的问题，并优化了标题生成逻辑。
+
 ## v0.2.2 更新内容
-- **增量总结**：LLM 摘要现在仅处理之前运行中未被总结的新推文。历史推文保留在数据库中但会被摘要器跳过，以减少噪音和 token 消耗。
-- **成本优化**：默认抓取限制降至每账号 20 条，回溯窗口优化为 1 天，最大限度减少冗余 API 调用。
-- **可靠性增强**：网络客户端切换至 `requests` 库，解决了在 macOS 等环境下的 SSL 握手问题。
+- **增量总结**：LLM 摘要现在仅处理之前运行中未被总结的新推文。
+- **成本优化**：默认抓取限制降至每账号 20 条。
+- **可靠性增强**：网络客户端切换至 `requests` 库。
 
 ## 快速开始 (样本/离线模式)
 ```bash
